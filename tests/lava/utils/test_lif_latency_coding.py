@@ -8,14 +8,14 @@ from lava.magma.core.process.process import AbstractProcess
 from lava.magma.core.process.variable import Var
 from lava.magma.core.resources import CPU
 from lava.magma.core.sync.protocols.loihi_protocol import LoihiProtocol
-from lava.magma.core.model.py.ports import PyInPort, PyOutPort
+from lava.magma.core.model.py.ports import PyOutPort
 from lava.magma.core.run_conditions import RunSteps
-from lava.magma.core.decorator import implements, requires, tag
+from lava.magma.core.decorator import implements, requires
 from lava.proc.monitor.process import Monitor
 from lava.proc.lif.process import LIF
 from lava.magma.core.run_configs import Loihi1SimCfg
-import matplotlib.pyplot as plt
-from lava.utils.latency_coding import find_latency_coding_lif_params
+from lava.utils.latency_coding import find_latency_coding_lif_params, \
+    CUBA_u_v_dyn
 
 
 class VecSendProcess(AbstractProcess):
@@ -48,7 +48,7 @@ class PyVecSendModelFloat(PyLoihiProcessModel):
 
     def run_spk(self):
         """
-        Send `spikes_to_send` if current time-step requires it
+        Send `spikes_to_send` if current time-step is 1
         """
         if self.current_ts == 1:
             self.s_out.send(self.vec_to_send)
@@ -58,24 +58,125 @@ class PyVecSendModelFloat(PyLoihiProcessModel):
 
 class TestLatencyCodingLIF(unittest.TestCase):
     def test_latency_code_param_optimization(self):
+        """
+        Tests the activation-to-latency coding feature of LIF neurons. More
+        specifically it tests the util func find_latency_coding_lif_params().
+        This Function that search for the optimal parameters of LIF neuron model
+        tha can convert its input activation values "a_in" into the latency
+        of its output spike.
+        """
 
+        # Define constraints for activity-to-latency coding...
+
+        # Max number of time steps that simulation will be run for, also the
+        # number of max time steps allowed for latency coding
         num_steps = 40
-        a_max = 100
-        a_min = 50
-        precision = 10
+        a_max = 100  # Upper bound of activation range that we want to sample
+        a_min = 50   # Lower bound of activation range that we want to sample
+        precision = 5  # Precision of sampling in the  range of the activation
 
+        # Calculate number of neurons necessary to simulate all sampled values
+        # of activation by stimulating these neurons correspondingly
         n_neurons = int(a_max/precision)
-        shape = (n_neurons,)
+        shape = (n_neurons,)  # the shape of neural population
+
+        # Define current (u) inputs, which are sampled from the provided
+        # range with given precision. These current (u) values will be fed to
+        # the corresponding neurons
         current_inputs = np.arange(precision, a_max+precision, precision)
 
-        du, dv, k_vth = find_latency_coding_lif_params(a_min=a_min,
-                                                       a_max=a_max,
-                                                       precision=precision,
-                                                       tau=num_steps)
+        # Run the grid search for (du, dv, vth) to find optimal parameters
+        # for activation-to-latency coding
+        du, dv, vth = find_latency_coding_lif_params(a_min=a_min,
+                                                     a_max=a_max,
+                                                     precision=precision,
+                                                     max_num_steps=num_steps,
+                                                     k_tau=0.5)
 
-        # du, dv, k_vth = (0.01, 0.06, 5.5)
+        # Create a LIF neuron population with these optimized parameters.
+        # These neurons will receives different a_in (activations) and will
+        # convert it to the latency of their spikes
+        lif = LIF(shape=shape,
+                  du=du,
+                  dv=dv,
+                  bias=0,
+                  bias_exp=0,
+                  vth=vth)
 
-        vth = k_vth * a_max
+        # The input process to send these a_in values using above created array
+        act_input = VecSendProcess(shape=shape,
+                                   num_steps=num_steps,
+                                   vec_to_send=current_inputs)
+
+        # Create monitor and probe the output spike of these neurons
+        monitor = Monitor()
+        monitor.probe(lif.s_out, num_steps=num_steps)
+
+        # Connection activation input process to the a_in of LIF process
+        act_input.s_out.connect(lif.a_in)
+
+        # Use standard Loihi1SimCfg
+        rcnd = RunSteps(num_steps=num_steps)
+        rcfg = Loihi1SimCfg()
+
+        lif.run(condition=rcnd, run_cfg=rcfg)
+
+        # Fetch and construct the monitored data with get_data(..) method
+        data = monitor.get_data()
+
+        # Access the collected data with the names of monitor proc and var
+        probe_data = data[lif.name][lif.s_out.name]
+
+        lif.stop()
+
+        # Get the spike times of the first spike (latency coding) for each input
+        # activation value
+        spike_times = np.where(probe_data.T.any(axis=1),
+                               probe_data.T.argmax(axis=1), -1)
+
+        # Number of spike generating u0 values, i.e. the number activation (
+        # current) values that should generate a spike
+        n_sp_gen_u0 = len(current_inputs[current_inputs >= a_min])
+
+        # Count the number of activation values that incorrectly DID NOT
+        # generate a spike. This value should be zero
+        below_a_min_spike_count = np.count_nonzero(
+                spike_times[current_inputs < a_min] != -1)
+        self.assertEqual(below_a_min_spike_count, 0,
+                         "Some below a_min inputs generated a spike")
+
+        # Count the number of activation values that incorrectly DID NOT
+        # generate a spike This value should be equal to the number of spike
+        # generating u0 values, i.e. "n_sp_gen_u0"
+        above_a_min_spike_count = np.count_nonzero(
+                spike_times[current_inputs >= a_min] != -1)
+        self.assertEqual(above_a_min_spike_count, n_sp_gen_u0,
+                         "Not all inputs in the range have generated spike")
+
+        # Count the number of unique latencies for those activations that should
+        # have generated a spike. This value should be equal to the number of
+        # spike generating u0 values, i.e. "n_sp_gen_u0"
+        unique_s_ts = len(np.unique(spike_times[current_inputs >= a_min]))
+        self.assertEqual(unique_s_ts, n_sp_gen_u0,
+                         "Not all generated spikes have unique latency")
+
+    def test_lif_num_sim_match_lava_lif(self):
+        """ Tests CUBA_u_v_dyn() function that simulates the current, voltage
+        and spiking dynamics of LIF (CUBA) neuron model. This simple
+        simulation is validated to produce same results as Lava LIF process.
+        This test is responsible for the validation of spike times"""
+
+        # Setup
+        num_steps = 40
+        a_max = 100
+        precision = 5
+
+        n_neurons = int(a_max / precision)
+        shape = (n_neurons,)
+        current_inputs = np.arange(precision, a_max + precision, precision)
+
+        # The optimal values found in the test_latency_code_param_optimization()
+        du, dv, vth = [0.0125, 0.0325, 800]
 
         lif = LIF(shape=shape,
                   du=du,
@@ -89,14 +190,10 @@ class TestLatencyCodingLIF(unittest.TestCase):
                                    vec_to_send=current_inputs)
 
         monitor = Monitor()
-        monitor_u = Monitor()
-        monitor_v = Monitor()
 
         act_input.s_out.connect(lif.a_in)
 
         monitor.probe(lif.s_out, num_steps=num_steps)
-        monitor_u.probe(lif.u, num_steps=num_steps)
-        # monitor_v.probe(lif.v, num_steps=num_steps)
 
         rcnd = RunSteps(num_steps=num_steps)
         rcfg = Loihi1SimCfg()
@@ -105,47 +202,29 @@ class TestLatencyCodingLIF(unittest.TestCase):
 
         # Fetch and construct the monitored data with get_data(..) method
         data = monitor.get_data()
-        data_u = monitor_u.get_data()
-        # data_v = monitor_v.get_data()
 
         # Access the collected data with the names of monitor proc and var
         probe_data = data[lif.name][lif.s_out.name]
-        u_data = data_u[lif.name][lif.u.name]
-        # v_data = data_v[lif.name][lif.v.name]
 
         lif.stop()
 
-        # print(probe_data.T)
+        # Get the spike data from the CUBA_u_v_dyn() simulation with the same
+        # parameters
+        spikes, _, _ = CUBA_u_v_dyn(du, dv, vth,
+                                    current_inputs.copy(),
+                                    current_inputs.copy(),
+                                    num_steps)
 
-        plt.imshow(probe_data.T, cmap=plt.cm.gray)
-        plt.show()
+        # Validate that they are equal
+        self.assertTrue(np.array(spikes == probe_data.T).all())
 
-        spikes, u_sim, v_sim = CUBA_u_v_dyn(du, dv, vth,
-                                            current_inputs.copy(),
-                                            current_inputs.copy(),
-                                            num_steps)
-
-        spike_times = np.where(spikes.any(axis=1), spikes.argmax(axis=1),
-                               -1)
-
-        plt.imshow(spikes, cmap=plt.cm.gray)
-        plt.show()
-
-        print(u_sim[14, :])
-        print(u_data[:, 14])
-        # y0 = [75, 75]
-        # t = np.arange(0, num_steps)
-        # # sol = odeint(CUBA, y0, t, args=(du, dv))
-        #
-        # plt.plot(t, sol[:, 0], 'b', label='u(t)')
-        # plt.plot(t, u_data[:, 14], 'b-', label='u_lif(t)')
-        # # plt.plot(t, sol[:, 1], 'g', label='v(t)')
-        # # plt.plot(t, v_data[:, 14], 'g-', label='v_lif(t)')
-        # plt.legend(loc='best')
-        # plt.xlabel('t')
-        # plt.grid()
+        # Comment in to see the simple spike raster plots
+        # plt.imshow(spikes, cmap=plt.cm.gray)
         # plt.show()
-        # print(sol[:, 0])
+        #
+        # plt.imshow(probe_data.T, cmap=plt.cm.gray)
+        # plt.show()
+
 
 if __name__ == '__main__':
     unittest.main()

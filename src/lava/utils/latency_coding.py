@@ -41,7 +41,7 @@ from strongest to weakest penalty):
 
 
 def find_latency_coding_lif_params(a_min=50, a_max=100, precision=10,
-                                   max_num_steps=20, k_tau=2):
+                                   max_num_steps=20, k_tau=1):
     """
     Function that search for the optimal parameters of LIF neuron model tha can
     convert its input activation values "a_in" into the latency of its output
@@ -53,8 +53,10 @@ def find_latency_coding_lif_params(a_min=50, a_max=100, precision=10,
     a_max : Upper bound of the activation range to be sampled
     precision : Precision of the sampling in the given range of the activation
     max_num_steps : Number of max time steps allowed for latency coding
-    k_tau : Ratio of max_num_steps to the allowed time constants for current
-    and voltage decays of the LIF neuron
+    k_tau : Scalar term that defines the maximum time constant of current and
+    voltage decay of the LIF neuron in relation to max_num_steps:
+    tau_v = k_tau * max_num_steps
+    tau_u = k_tau * max_num_steps
 
     Returns
     -------
@@ -71,8 +73,8 @@ def find_latency_coding_lif_params(a_min=50, a_max=100, precision=10,
     # defined based on maximum allowed time steps for latency coding window
     # and how fast u and v should decay compared to this window (i.e. through
     # k_tau parameter)
-    du = slice(1/(max_num_steps/k_tau), 1, 0.02)
-    dv = slice(1/(max_num_steps/k_tau), 1, 0.02)
+    du = slice(1/(k_tau*max_num_steps), 1, 0.02)
+    dv = slice(1/(k_tau*max_num_steps), 1, 0.02)
 
     # vth slice is defined based on a_max
     vth = slice(0.75*a_max, 10*a_max, 0.25*a_max)

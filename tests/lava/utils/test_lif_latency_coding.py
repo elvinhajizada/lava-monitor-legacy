@@ -74,6 +74,7 @@ class TestLatencyCodingLIF(unittest.TestCase):
         a_max = 100  # Upper bound of activation range that we want to sample
         a_min = 50   # Lower bound of activation range that we want to sample
         precision = 5  # Precision of sampling in the  range of the activation
+        k_tau = 2
 
         # Calculate number of neurons necessary to simulate all sampled values
         # of activation by stimulating these neurons correspondingly
@@ -91,7 +92,7 @@ class TestLatencyCodingLIF(unittest.TestCase):
                                                      a_max=a_max,
                                                      precision=precision,
                                                      max_num_steps=num_steps,
-                                                     k_tau=0.5)
+                                                     k_tau=k_tau)
 
         # Create a LIF neuron population with these optimized parameters.
         # These neurons will receives different a_in (activations) and will

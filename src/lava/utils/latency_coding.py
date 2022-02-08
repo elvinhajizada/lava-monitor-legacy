@@ -4,6 +4,8 @@
 
 import numpy as np
 from scipy import optimize
+from scipy import spatial
+
 
 """
 This utility file contains necessary functions to find optimal parameter for 
@@ -142,15 +144,15 @@ def latency_coding_cost(grid_params, *fixed_params):
     # based on the user defined precision and upper bound of the activation
     # range. This range does not finish at a_min, as we want to test those
     # values below a_min to validate that they don't generate any spike at all
-    u0_vals = np.arange(precision, a_max+precision, precision)
+    u0_vals = np.arange(a_min-precision, a_max+precision, precision)
 
-    # Initialize voltage values to the intial current values in line with LIF
+    # Initialize voltage values to the initial current values in line with LIF
     # process model implementation
     v0_vals = u0_vals
 
     # Number of spike generating u0 values, i.e. the number activation (
     # current) values that should generate a spike
-    n_sp_gen_u0 = len(u0_vals[u0_vals >= a_min])
+    n_sp_gen_u0 = len(u0_vals)
 
     # run the simulation of CUBA LIF model for u,v and spike dynamics using
     # the provided helper function to get the spike data
@@ -161,23 +163,18 @@ def latency_coding_cost(grid_params, *fixed_params):
     # activation value
     spike_times = np.where(spikes.any(axis=1), spikes.argmax(axis=1), -1)
 
-    # Count the number of activation values that incorrectly generated a spike
-    # i.e. those below a_min and add this to the cost with highest penalty
-    below_a_min_spike_count = np.count_nonzero(spike_times[u0_vals < a_min]
-                                               != -1)
-    cost = cost + 1000 * below_a_min_spike_count
+    # u=a_min should generate a spike, hence spike_times[0] should not be -1,
+    # otherwise it incurs high cost
+    cost = cost + 10000 * (spike_times[1] == -1)
 
-    # Count the number of activation values that incorrectly DID NOT generate
-    # a spike and add it to the cost with the second highest penalty term
-    above_a_min_spike_count = np.count_nonzero(spike_times[u0_vals >= a_min]
-                                               != -1)
-    cost = cost + 300 * (n_sp_gen_u0 - above_a_min_spike_count)
+    # u=a_min-precision should not generate a spike, hence spike_times[0]
+    # should be -1, otherwise it incurs high cost
+    cost = cost + 10000 * (spike_times[0] != -1)
 
-    # Count the number of unique latencies for those activations that should
-    # have generated a spike. Any divergence from the optimal count
-    # (n_sp_gen_u0) is added to the cost with the third highest penalty term
-    unique_s_ts = len(np.unique(spike_times[u0_vals >= a_min]))
-    cost = cost + 100 * (n_sp_gen_u0 - unique_s_ts)
+    # Validate that spike times are unique and strictly increasing
+    # is_strictly_increasing = np.all(spike_times[1:] > spike_times[:-1])
+    n_repeat = np.sum(np.diff(spike_times[1:]) == 0)
+    cost = cost + 10000 * n_repeat/n_sp_gen_u0
 
     # Finally when and if all of the other components of the cost is zero,
     # the deciding factor for the optimality of the parameter is decided
@@ -187,6 +184,21 @@ def latency_coding_cost(grid_params, *fixed_params):
     # latency is the last (and smallest) penalty term
     last_spike_ts = spike_times[u0_vals >= a_min][0]
     cost = cost + last_spike_ts
+
+    for decrement in range(1, precision, 1):
+        u0_vals_end = u0_vals - decrement
+        v0_vals_end = u0_vals_end
+
+        spikes, _, _ = CUBA_u_v_dyn(du, dv, vth,
+                                    u0_vals_end.copy(),
+                                    v0_vals_end.copy(),
+                                    num_steps)
+
+        spike_times_end = np.where(spikes.any(axis=1),
+                                   spikes.argmax(axis=1), -1)
+
+        n_repeat = np.sum(np.diff(spike_times_end[1:]) == 0)
+        cost = cost + 10000 * n_repeat / n_sp_gen_u0
 
     return cost
 

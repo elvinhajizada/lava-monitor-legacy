@@ -1,10 +1,9 @@
-# Copyright (C) 2021 Intel Corporation
+# Copyright (C) 2021-23 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 # See: https://spdx.org/licenses/
 
 import unittest
 import time
-from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 import typing as ty
 import functools as ft
@@ -21,6 +20,9 @@ from lava.magma.core.model.py.ports import (
     PyOutPortVectorDense,
     VirtualPortTransformer,
     IdentityTransformer)
+from lava.magma.runtime.message_infrastructure.shared_memory_manager import (
+    SharedMemoryManager
+)
 
 
 class MockInterface:
@@ -99,7 +101,6 @@ class TestPyPorts(unittest.TestCase):
 
     def test_py_in_port_probe(self):
         """Tests PyInPort probe method on all implementations of PyInPorts."""
-        # TODO: (GK) Add other classes when we support them
         classes = [PyInPortVectorDense]
 
         for cls in classes:

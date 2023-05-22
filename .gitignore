@@ -3,8 +3,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Lava PreDefs
+predefs_*.h
+
 # C extensions
 *.so
+
+# Dataloader folder
+src/lava/utils/dataloader/temp/
+src/lava/utils/dataloader/mnist.npy
 
 # Distribution / packaging
 .Python

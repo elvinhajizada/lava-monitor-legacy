@@ -1,49 +1,54 @@
-# Copyright (C) 2021 Intel Corporation
+# Copyright (C) 2021-22 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 # See: https://spdx.org/licenses/
+
 import typing as ty
 import numpy as np
+from scipy.sparse import csr_matrix, spmatrix
+from lava.utils.sparse import find
+from lava.magma.core.process.interfaces import (
+    AbstractProcessMember,
+    IdGeneratorSingleton,
+)
 
-from lava.magma.core.process.interfaces import \
-    AbstractProcessMember, IdGeneratorSingleton
 
-
-# ToDo: (AW) Clean up class docstring
 class Var(AbstractProcessMember):
     """Represents a Lava variable. A Var implements the state of a Process and
     is part of its public user interface. Vars have the following properties:
 
     - Vars are numeric objects: Typically vars represent ints, float data types.
     - Vars are tensor-valued: In general Vars represent multiple numeric
-    values not just scalar objects with a shape.
+      values not just scalar objects with a shape.
     - Vars can be initialized with numeric objects with a dimensionality
-    equal or less than specified by its shape. The initial value will be
-    broadcast to the shape of the Var at compile time.
+      equal or less than specified by its shape. The initial value will be
+      broadcast to the shape of the Var at compile time.
     - Vars have a name: The Variable name will be assigned by the parent
-    process of a Var.
+      process of a Var.
     - Vars are mutable at runtime.
     - Vars are owned by a Process but shared-memory access by other Process
-    is possible though should be used with caution.
+      is possible though should be used with caution.
 
     How to enable interactive Var access?
-    Executable ----------
-                        |
-    Var -> Process -> Runtime -> RuntimeService -> ProcModel -> Var
+
+    >>> Executable ----------
+    >>>                     |
+    >>> Var -> Process -> Runtime -> RuntimeService -> ProcModel -> Var
 
     - Var can access Runtime via parent Process.
     - The compiler could have prepared the Executable with mapping
-    information where each Var of a Process got mapped to. I.e. these can
-    just be the former ExecVars. So the ExecVars are just stored inside the
-    Executable.
+      information where each Var of a Process got mapped to. I.e. these can
+      just be the former ExecVars. So the ExecVars are just stored inside the
+      Executable.
     - Alternatively, the Executable stores a map from var_id -> ExecVar
 
     """
 
     def __init__(
-            self,
-            shape: ty.Tuple[int, ...],
-            init: ty.Union[bool, int, list, np.ndarray] = 0,
-            shareable: bool = True):
+        self,
+        shape: ty.Tuple[int, ...],
+        init: ty.Union[bool, float, list, tuple, np.ndarray] = 0,
+        shareable: bool = True,
+    ):
         """Initializes a new Lava variable.
 
         Parameters:
@@ -59,8 +64,19 @@ class Var(AbstractProcessMember):
         self.id: int = VarServer().register(self)
         self.name: str = "Unnamed variable"
         self.aliased_var: ty.Optional[Var] = None
+        # VarModel generated during compilation
+        self._model: ty.Optional["AbstractVarModel"] = None
 
-    def alias(self, other_var: 'Var'):
+    @property
+    def model(self):
+        """Return model."""
+        return self._model
+
+    @model.setter
+    def model(self, val: "AbstractVarModel"):
+        self._model = val
+
+    def alias(self, other_var: "Var"):
         """Establishes an 'alias' relationship between this and 'other_var'.
         The other Var must be a member of a strict sub processes of this
         Var's parent process which might be instantiated within a
@@ -77,11 +93,14 @@ class Var(AbstractProcessMember):
         if not isinstance(other_var, Var):
             raise AssertionError("'other_var' must be a Var instance.")
         if self.shape != other_var.shape:
-            raise AssertionError("Shapes of this and 'other_var' must "
-                                 "be the same.")
+            raise AssertionError(
+                "Shapes of this and 'other_var' must " "be the same."
+            )
         if self.shareable != other_var.shareable:
-            raise AssertionError("'shareable' attribute of this and "
-                                 "'other_var' must be the same.")
+            raise AssertionError(
+                "'shareable' attribute of this and "
+                "'other_var' must be the same."
+            )
 
         # Establish 'alias' relationship
         self.aliased_var = other_var
@@ -105,20 +124,43 @@ class Var(AbstractProcessMember):
                     f"must be a member of a process that is a strict sub "
                     f"process of the aliasing Var's '{self.name}' in process "
                     f"'{self.process.name}::{self.process.__class__.__name__}'"
-                    f".")
+                    f"."
+                )
 
-    def set(self, value: np.ndarray, idx: np.ndarray = None):
+    def set(self,
+            value: ty.Union[np.ndarray, str, spmatrix],
+            idx: np.ndarray = None):
         """Sets value of Var. If this Var aliases another Var, then set(..) is
         delegated to aliased Var."""
         if self.aliased_var is not None:
             self.aliased_var.set(value, idx)
         else:
             if self.process.runtime:
+                # encode if var is str
+                if isinstance(value, str):
+                    value = np.array(
+                        list(value.encode("ascii")), dtype=np.int32
+                    )
+                elif isinstance(value, spmatrix):
+                    value = value.tocsr()
+                    init_dst, init_src, init_val = find(self.init,
+                                                        explicit_zeros=True)
+                    dst, src, val = find(value, explicit_zeros=True)
+                    if value.shape != self.init.shape or \
+                            np.any(init_dst != dst) or \
+                            np.any(init_src != src) or \
+                            len(val) != len(init_val):
+                        raise ValueError("Indices and number of non-zero "
+                                         "elements must stay equal when using"
+                                         "set on a sparse matrix.")
+                    value = val
+
                 self.process.runtime.set_var(self.id, value, idx)
             else:
                 raise ValueError(
                     "No Runtime available yet. Cannot set new 'Var' without "
-                    "Runtime.")
+                    "Runtime."
+                )
 
     def get(self, idx: np.ndarray = None) -> np.ndarray:
         """Gets and returns value of Var. If this Var aliases another Var,
@@ -126,8 +168,18 @@ class Var(AbstractProcessMember):
         if self.aliased_var is not None:
             return self.aliased_var.get(idx)
         else:
-            if self.process.runtime:
-                return self.process.runtime.get_var(self.id, idx)
+            if self.process and self.process.runtime:
+                buffer = self.process.runtime.get_var(self.id, idx)
+                if isinstance(self.init, str):
+                    # decode if var is string
+                    return bytes(buffer.astype(int).tolist()).decode("ascii")
+                if isinstance(self.init, csr_matrix):
+                    dst, src, _ = find(self.init)
+
+                    ret = csr_matrix((buffer, (dst, src)), self.init.shape)
+                    return ret
+                else:
+                    return buffer
             else:
                 return self.init
 

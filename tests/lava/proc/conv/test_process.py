@@ -1,6 +1,7 @@
-# Copyright (C) 2021 Intel Corporation
+# Copyright (C) 2021-22 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 # See: https://spdx.org/licenses/
+
 import unittest
 import numpy as np
 from lava.proc.conv.process import Conv
@@ -12,8 +13,8 @@ class TestConvProcess(unittest.TestCase):
         """Tests instantiation of Conv"""
         weight = np.random.randint(256, size=[8, 3, 5, 3]) - 128
         conv = Conv(
-            input_shape=(100, 60, 3),
             weight=weight,
+            input_shape=(100, 60, 3),
             padding=(1, 2),
             stride=1,
         )

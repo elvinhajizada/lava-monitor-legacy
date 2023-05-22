@@ -1,3 +1,7 @@
+# Copyright (C) 2021-22 Intel Corporation
+# SPDX-License-Identifier: BSD-3-Clause
+# See: https://spdx.org/licenses/
+
 import unittest
 
 from lava.magma.core.decorator import implements, requires
@@ -14,7 +18,7 @@ from lava.magma.core.model.py.model import PyLoihiProcessModel
 
 class SimpleProcess(AbstractProcess):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__()
         shape = kwargs["shape"]
         self.u = Var(shape=shape, init=0)
         self.v = Var(shape=shape, init=0)

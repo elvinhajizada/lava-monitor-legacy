@@ -1,3 +1,7 @@
+# Copyright (C) 2021-22 Intel Corporation
+# SPDX-License-Identifier: BSD-3-Clause
+# See: https://spdx.org/licenses/
+
 import unittest
 from time import sleep
 
@@ -15,7 +19,7 @@ from lava.magma.core.sync.protocols.loihi_protocol import LoihiProtocol
 
 class SimpleProcess(AbstractProcess):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__()
         shape = kwargs["shape"]
         self.u = Var(shape=shape, init=0)
         self.v = Var(shape=shape, init=0)
